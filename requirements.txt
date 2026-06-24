@@ -4,3 +4,14 @@ pdfplumber
 python-docx
 anthropic
 python-multipart
+google-auth-oauthlib
+google-api-python-client
+supabase
+python-dotenv
+inngest
+sendgrid
+bcrypt
+PyJWT
+razorpay
+elevenlabs
+retell-sdk

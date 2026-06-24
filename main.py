@@ -1,86 +1,93 @@
-from fastapi import FastAPI, UploadFile, File, Header, HTTPException
-from fastapi.responses import JSONResponse
-import pdfplumber, docx, os, json
-from datetime import date
-import anthropic
+from dotenv import load_dotenv
+load_dotenv()
 
-app = FastAPI()
-client = anthropic.Anthropic()  # reads ANTHROPIC_API_KEY from environment
+from fastapi import FastAPI, UploadFile, File, Header, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+import os
+
+from lib.cv_parser import parse_cv_file
+
+app = FastAPI(
+    title="InboxHire API",
+    version="0.1.0",
+    openapi_tags=[
+        {"name": "Authentication", "description": "Signup, login, password management"},
+        {"name": "Team Management", "description": "Invite and manage employees within a workspace"},
+        {"name": "Billing & Plans", "description": "View plans, create Razorpay orders, verify payments"},
+        {"name": "Gmail Connections", "description": "Connect, list, assign, and disconnect Gmail inboxes"},
+        {"name": "Drive Connection", "description": "Connect Google Drive, choose a folder, and scan CVs"},
+        {"name": "Jobs", "description": "Create and manage job postings, view ranked candidates"},
+        {"name": "Applications", "description": "Per-candidate actions — stage, notes, score override, CV access, outreach email"},
+        {"name": "Search & AI Agent", "description": "Conversational candidate search and agentic actions (drafting, etc.)"},
+        {"name": "Voice", "description": "Text-to-speech for spoken search responses"},
+        {"name": "CV Parsing", "description": "Internal endpoint used by the parsing pipeline"},
+        {"name": "Background Jobs", "description": "Cron polling and Inngest — internal, not for direct manual use"},
+    ],
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173", "http://localhost:3000"],  # add your deployed frontend URL later
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+from lib.oauth_routes import router as oauth_router
+app.include_router(oauth_router, tags=["Gmail Connections"])
+
+from lib.connection_routes import router as connection_router
+app.include_router(connection_router, tags=["Gmail Connections"])
+
+from lib.drive_oauth_routes import router as drive_oauth_router
+from lib.drive_routes import router as drive_router
+
+app.include_router(drive_oauth_router, tags=["Drive Connection"])
+app.include_router(drive_router, tags=["Drive Connection"])
+
+from lib.auth_routes import router as auth_router
+app.include_router(auth_router, tags=["Authentication"])
+
+from lib.team_routes import router as team_router
+app.include_router(team_router, tags=["Team Management"])
+
+from lib.billing_routes import router as billing_router
+app.include_router(billing_router, tags=["Billing & Plans"])
+
+from lib.job_routes import router as job_router
+app.include_router(job_router, tags=["Jobs"])
+
+from lib.application_routes import router as application_router
+app.include_router(application_router, tags=["Applications"])
+
+from lib.email_routes import router as email_router
+app.include_router(email_router, tags=["Applications"])
+
+from lib.search_routes import router as search_router
+app.include_router(search_router, tags=["Search & AI Agent"])
+
+from lib.agent_routes import router as agent_router
+app.include_router(agent_router, tags=["Search & AI Agent"])
+
+from lib.voice_routes import router as voice_router
+app.include_router(voice_router, tags=["Voice"])
+
+import inngest.fast_api
+from lib.cron_routes import router as cron_router
+from lib.inngest_app import inngest_client, parse_cv
+
+app.include_router(cron_router, tags=["Background Jobs"])
+inngest.fast_api.serve(app, inngest_client, [parse_cv])
 
 PARSER_SECRET_KEY = os.environ.get("PARSER_SECRET_KEY", "dev-secret")
 
-# ---------- Text extraction (unchanged, still free) ----------
-
-def extract_text(path: str, filename: str) -> str:
-    if filename.lower().endswith(".pdf"):
-        text = ""
-        with pdfplumber.open(path) as pdf:
-            for page in pdf.pages:
-                text += page.extract_text() or ""
-        return text.strip()
-    elif filename.lower().endswith((".docx", ".doc")):
-        doc = docx.Document(path)
-        return "\n".join([p.text for p in doc.paragraphs]).strip()
-    return ""
-
-# ---------- AI extraction ----------
-
-EXTRACTION_PROMPT = """You are a resume/CV information extractor. Today's date is {today}.
-You will be given raw text extracted from a candidate's resume or profile (this may be a PDF resume or a scraped LinkedIn-style profile). Extract the following fields and return STRICT JSON only — no markdown formatting, no code fences, no explanation, just the JSON object:
-
-{{
-  "name": "",
-  "email": "",
-  "phone": "",
-  "skills": [],
-  "experience": [{{"title": "", "company": "", "from": "", "to": ""}}],
-  "education": [{{"degree": "", "institution": "", "year": ""}}],
-  "total_exp_years": 0,
-  "location": "",
-  "linkedin_url": ""
-}}
-
-Rules:
-- "phone" must be a real phone number from the text. Tracking IDs, request IDs, or other long numeric strings are NOT phone numbers — leave phone empty if no genuine phone number is present.
-- "to" should be "Present" for ongoing roles.
-- total_exp_years should be your best numeric estimate of total professional experience, accounting for overlapping or sequential roles, using today's date for any "Present" role.
-- If a field isn't present in the text, use an empty string or empty array. Never invent information.
-"""
-
-def extract_with_ai(raw_text: str) -> dict:
-    prompt = EXTRACTION_PROMPT.format(today=date.today().isoformat())
-    response = client.messages.create(
-        model="claude-haiku-4-5-20251001",
-        max_tokens=1024,
-        system=prompt,
-        messages=[{"role": "user", "content": raw_text}]
-    )
-    text = response.content[0].text.strip()
-    if text.startswith("```"):
-        text = text.split("```")[1]
-        if text.startswith("json"):
-            text = text[4:]
-    return json.loads(text)
-
 # ---------- API endpoint ----------
 
-@app.post("/parse")
+@app.post("/parse", tags=["CV Parsing"])
 async def parse_cv(file: UploadFile = File(...), x_secret: str = Header(None)):
     if x_secret != PARSER_SECRET_KEY:
         raise HTTPException(status_code=401, detail="Invalid secret key")
 
-    tmp_path = f"./{file.filename}"
     content = await file.read()
-    with open(tmp_path, "wb") as f:
-        f.write(content)
-
-    raw_text = extract_text(tmp_path, file.filename)
-    os.remove(tmp_path)
-
-    try:
-        result = extract_with_ai(raw_text)
-    except Exception as e:
-        result = {"error": f"AI extraction failed: {str(e)}"}
-
-    result["raw_text"] = raw_text
+    result = parse_cv_file(content, file.filename)
     return JSONResponse(result)
