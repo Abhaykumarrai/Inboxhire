@@ -5,6 +5,7 @@ from google_auth_oauthlib.flow import Flow
 from googleapiclient.discovery import build
 from lib.supabase_client import supabase
 from lib.auth_utils import decode_token_value
+from lib.connection_limits import get_source_limits, count_connected
 
 router = APIRouter()
 
@@ -28,7 +29,16 @@ def drive_connect(token: str):
 
     existing = supabase.table("drive_connections").select("id").eq("workspace_id", workspace_id).maybe_single().execute()
     if existing and existing.data:
-        raise HTTPException(status_code=400, detail="A Drive connection already exists for this workspace. Disconnect it first to connect a different account.")
+        raise HTTPException(status_code=400, detail="A Drive connection already exists. Disconnect it first to connect a different account.")
+
+    limits = get_source_limits(workspace_id)
+    counts = count_connected(workspace_id)
+
+    if limits["combined_cap"] is not None:
+        if counts["gmail"] + counts["drive"] >= limits["combined_cap"]:
+            raise HTTPException(status_code=400, detail="Your plan allows Gmail OR Drive, not both. Disconnect Gmail first, or upgrade.")
+    elif limits["max_drive"] < 1:
+        raise HTTPException(status_code=400, detail="Google Drive isn't included in your current plan. Upgrade to connect Drive.")
 
     flow = build_drive_flow()
     auth_url, _ = flow.authorization_url(access_type="offline", prompt="consent", state=workspace_id)

@@ -23,25 +23,23 @@ def signup(data: SignupRequest):
     if existing and existing.data:
         raise HTTPException(status_code=400, detail="An account with this email already exists.")
 
+    demo_plan = supabase.table("plans").select("*").eq("name", "Demo").single().execute().data
+    now = datetime.now(timezone.utc)
+
     workspace = supabase.table("workspaces").insert({
-        "name": data.organization,
-        "organization": data.organization,
-        "industry": data.industry,
-        "location": data.location,
-        "employee_count": data.employee_count,
-        "plan": "starter",
+        "name": data.organization, "organization": data.organization, "industry": data.industry,
+        "location": data.location, "employee_count": data.employee_count,
+        "plan_id": demo_plan["id"], "subscription_status": "demo",
+        "ai_credits_remaining": demo_plan["ai_credits_included"], "ai_credits_used": 0,
+        "emails_limit": demo_plan["emails_included"], "emails_sent_this_cycle": 0,
+        "billing_cycle_start": now.isoformat(), "billing_cycle_end": (now + timedelta(days=30)).isoformat(),
     }).execute().data[0]
 
     temp_password = secrets.token_urlsafe(10)
     password_hash = bcrypt.hashpw(temp_password.encode(), bcrypt.gensalt()).decode()
-
     supabase.table("users").insert({
-        "workspace_id": workspace["id"],
-        "name": data.owner_name,
-        "email": data.email,
-        "password_hash": password_hash,
-        "role": "admin",
-        "must_change_password": True,
+        "workspace_id": workspace["id"], "name": data.owner_name, "email": data.email,
+        "password_hash": password_hash, "role": "admin", "must_change_password": True,
     }).execute()
 
     send_credentials_email(data.email, data.owner_name, temp_password)

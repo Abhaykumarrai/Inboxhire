@@ -127,7 +127,7 @@ def poll_drive_connection(conn):
     creds = DriveCreds(**conn["drive_token"])
     service = build_drive_service("drive", "v3", credentials=creds)
 
-    jobs = supabase.table("jobs").select("id").eq("workspace_id", conn["workspace_id"]).eq("status", "active").execute().data
+    jobs = supabase.table("jobs").select("id").eq("drive_connection_id", conn["id"]).eq("status", "active").execute().data
     job_ids = [j["id"] for j in jobs]
     if not job_ids:
         print(">>> No active jobs in this workspace — skipping Drive scan")

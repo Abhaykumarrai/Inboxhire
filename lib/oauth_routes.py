@@ -5,6 +5,7 @@ from google_auth_oauthlib.flow import Flow
 from googleapiclient.discovery import build
 from lib.supabase_client import supabase
 from lib.auth_utils import decode_token_value
+from lib.connection_limits import get_source_limits, count_connected
 
 router = APIRouter()
 
@@ -22,33 +23,17 @@ def build_flow():
         redirect_uri=os.environ["GOOGLE_REDIRECT_URI"],
     )
 
-def get_plan_limit(workspace_id: str) -> int:
-    workspace = supabase.table("workspaces").select("plan_id").eq("id", workspace_id).single().execute().data
-    if not workspace.get("plan_id"):
-        return 1  # no active plan yet — allow exactly one connection for trial/testing
-    plan = supabase.table("plans").select("max_gmail_connections").eq("id", workspace["plan_id"]).single().execute().data
-    return plan["max_gmail_connections"]
-
 @router.get("/api/auth/gmail/connect")
 def gmail_connect(token: str):
-    user = decode_token_value(token)
-    workspace_id = user["workspace_id"]
+    workspace_id = decode_token_value(token)["workspace_id"]
+    limits = get_source_limits(workspace_id)
+    counts = count_connected(workspace_id)
 
-    current_count = len(
-        supabase.table("gmail_connections")
-        .select("id")
-        .eq("workspace_id", workspace_id)
-        .eq("status", "connected")
-        .execute()
-        .data
-    )
-    max_allowed = get_plan_limit(workspace_id)
-
-    if current_count >= max_allowed:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Gmail connection limit reached ({max_allowed} for your plan). Upgrade to connect more inboxes.",
-        )
+    if limits["combined_cap"] is not None:
+        if counts["gmail"] + counts["drive"] >= limits["combined_cap"]:
+            raise HTTPException(status_code=400, detail="Your plan allows Gmail OR Drive, not both. Disconnect your current source first, or upgrade.")
+    elif counts["gmail"] >= limits["max_gmail"]:
+        raise HTTPException(status_code=400, detail=f"Gmail connection limit reached ({limits['max_gmail']} for your plan). Upgrade to connect more inboxes.")
 
     flow = build_flow()
     auth_url, _ = flow.authorization_url(access_type="offline", prompt="consent", state=workspace_id)
