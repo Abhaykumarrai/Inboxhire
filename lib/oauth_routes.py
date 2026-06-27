@@ -1,6 +1,6 @@
 import os
 from fastapi import APIRouter, HTTPException
-from fastapi.responses import RedirectResponse, PlainTextResponse
+from fastapi.responses import RedirectResponse, PlainTextResponse, HTMLResponse
 from google_auth_oauthlib.flow import Flow
 from googleapiclient.discovery import build
 from lib.supabase_client import supabase
@@ -88,4 +88,19 @@ def gmail_callback(code: str | None = None, error: str | None = None, state: str
             "status": "connected",
         }).execute()
 
-    return PlainTextResponse(f"Gmail connected: {email}. You can close this tab — scanning will start on the next poll.")
+    success_html = f"""
+<!DOCTYPE html>
+<html>
+<head><title>Gmail Connected</title></head>
+<body style="font-family: sans-serif; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; background: #f7f7fb;">
+  <div style="text-align: center; color: #444;">
+    <p>✅ Gmail connected: {email}</p>
+    <p style="color: #999; font-size: 13px;">Closing this window...</p>
+  </div>
+  <script>
+    setTimeout(function() {{ window.close(); }}, 600);
+  </script>
+</body>
+</html>
+"""
+    return HTMLResponse(content=success_html)

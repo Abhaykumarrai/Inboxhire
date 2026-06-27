@@ -1,6 +1,6 @@
 import os
 from fastapi import APIRouter, HTTPException
-from fastapi.responses import RedirectResponse, PlainTextResponse
+from fastapi.responses import RedirectResponse, PlainTextResponse, HTMLResponse
 from google_auth_oauthlib.flow import Flow
 from googleapiclient.discovery import build
 from lib.supabase_client import supabase
@@ -70,4 +70,19 @@ def drive_callback(code: str | None = None, error: str | None = None, state: str
         "workspace_id": workspace_id, "drive_email": email, "drive_token": token_dict, "status": "connected",
     }).execute()
 
-    return PlainTextResponse(f"Google Drive connected: {email}. Next, choose a folder to scan.")
+    success_html = f"""
+<!DOCTYPE html>
+<html>
+<head><title>Drive Connected</title></head>
+<body style="font-family: sans-serif; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; background: #f7f7fb;">
+  <div style="text-align: center; color: #444;">
+    <p>✅ Google Drive connected: {email}</p>
+    <p style="color: #999; font-size: 13px;">Closing this window...</p>
+  </div>
+  <script>
+    setTimeout(function() {{ window.close(); }}, 600);
+  </script>
+</body>
+</html>
+"""
+    return HTMLResponse(content=success_html)
