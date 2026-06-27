@@ -17,7 +17,9 @@ def list_plans():
 
 @router.get("/api/billing/current")
 def current_plan(workspace_id: str = Depends(get_current_workspace_id)):
-    workspace = supabase.table("workspaces").select("plan_id, subscription_status, ai_credits_remaining, ai_credits_used, billing_cycle_end").eq("id", workspace_id).single().execute().data
+    workspace = supabase.table("workspaces").select(
+        "plan_id, subscription_status, ai_credits_remaining, ai_credits_used, emails_limit, emails_sent_this_cycle, billing_cycle_start, billing_cycle_end"
+    ).eq("id", workspace_id).single().execute().data
     plan = supabase.table("plans").select("*").eq("id", workspace["plan_id"]).single().execute().data if workspace.get("plan_id") else None
     return {**workspace, "plan": plan}
 
