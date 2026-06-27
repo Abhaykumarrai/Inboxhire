@@ -7,8 +7,6 @@ from lib.auth_utils import get_current_user
 
 router = APIRouter()
 
-TEST_WORKSPACE_ID = "d935b95d-33a8-4777-b715-0db49378ac5e"  # same one as before
-
 def get_max_jobs(workspace_id: str) -> int:
     workspace = supabase.table("workspaces").select("plan_id").eq("id", workspace_id).single().execute().data
     if not workspace.get("plan_id"):
@@ -96,14 +94,25 @@ def list_available_sources(user: dict = Depends(get_current_user)):
     return {"gmail": gmail, "drive": drive, "api": api_row.data if api_row else None}
 
 @router.get("/api/jobs")
-def list_jobs():
+def list_jobs(user: dict = Depends(get_current_user)):
     jobs = (
         supabase.table("jobs")
         .select("*")
-        .eq("workspace_id", TEST_WORKSPACE_ID)
+        .eq("workspace_id", user["workspace_id"])
         .execute()
         .data
     )
+    for job in jobs:
+        applications = (
+            supabase.table("applications")
+            .select("stage, scores(total)")
+            .eq("job_id", job["id"])
+            .execute()
+            .data
+        )
+        job["total_found"] = len(applications)
+        job["shortlisted"] = sum(1 for a in applications if a.get("stage") == "shortlisted")
+        job["new_found"] = sum(1 for a in applications if a.get("stage") == "new")
     return jobs
 
 @router.get("/api/jobs/{job_id}/candidates")
