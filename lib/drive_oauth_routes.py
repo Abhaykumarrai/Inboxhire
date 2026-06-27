@@ -21,6 +21,7 @@ def build_drive_flow():
         },
         scopes=["https://www.googleapis.com/auth/drive.readonly"],
         redirect_uri=os.environ["GOOGLE_DRIVE_REDIRECT_URI"],
+        autogenerate_code_verifier=False,
     )
 
 @router.get("/api/drive/connect")

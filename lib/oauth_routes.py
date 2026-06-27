@@ -21,6 +21,7 @@ def build_flow():
         },
         scopes=["https://www.googleapis.com/auth/gmail.readonly"],
         redirect_uri=os.environ["GOOGLE_REDIRECT_URI"],
+        autogenerate_code_verifier=False,
     )
 
 @router.get("/api/auth/gmail/connect")

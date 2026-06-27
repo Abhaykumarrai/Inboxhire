@@ -4,7 +4,7 @@ pdfplumber
 python-docx
 anthropic
 python-multipart
-google-auth-oauthlib
+google-auth-oauthlib==1.2.2
 google-api-python-client
 supabase
 python-dotenv
