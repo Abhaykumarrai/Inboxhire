@@ -84,7 +84,8 @@ def verify_payment(data: VerifyPaymentRequest, workspace_id: str = Depends(get_c
         "subscription_status": "active",
         "ai_credits_remaining": plan["ai_credits_included"],
         "ai_credits_used": 0,
-        "emails_remaining": plan["emails_included"],
+        "emails_limit": plan["emails_included"],
+        "emails_sent_this_cycle": 0,
         "billing_cycle_start": now.isoformat(),
         "billing_cycle_end": (now + timedelta(days=30)).isoformat(),
     }).eq("id", workspace_id).execute()
