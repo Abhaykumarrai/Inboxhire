@@ -24,10 +24,11 @@ def build_candidate_fields(parsed: dict) -> dict:
 
 def match_jobs_for_document(workspace_id, cv_document_id, sender_email, parsed, job_ids, cv_path=None):
     effective_email = sender_email or parsed.get("email")
+    candidate_fields = build_candidate_fields(parsed)
 
     candidate_data = None
     if effective_email:
-        candidate = supabase.table("candidates").select("id, name, phone").eq("workspace_id", workspace_id).eq("email", effective_email).maybe_single().execute()
+        candidate = supabase.table("candidates").select("*").eq("workspace_id", workspace_id).eq("email", effective_email).maybe_single().execute()
         candidate_data = candidate.data if candidate else None
 
     if not candidate_data:
@@ -37,14 +38,17 @@ def match_jobs_for_document(workspace_id, cv_document_id, sender_email, parsed, 
             "name": parsed.get("name"),
             "phone": parsed.get("phone"),
             "raw_cv_url": cv_path,
+            **candidate_fields,
         }).execute().data[0]
-    elif not candidate_data.get("name") or not candidate_data.get("phone"):
-        # Existing candidate, but missing name/phone from an earlier incomplete write — backfill now, free
+    else:
         updates = {}
         if not candidate_data.get("name") and parsed.get("name"):
             updates["name"] = parsed.get("name")
         if not candidate_data.get("phone") and parsed.get("phone"):
             updates["phone"] = parsed.get("phone")
+        for key, value in candidate_fields.items():
+            if not candidate_data.get(key) and value:
+                updates[key] = value
         if updates:
             supabase.table("candidates").update(updates).eq("id", candidate_data["id"]).execute()
             candidate_data.update(updates)
