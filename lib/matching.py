@@ -1,6 +1,27 @@
 from lib.supabase_client import supabase
 from lib.scorer import calculate_score
 
+def find_current_role(experience: list) -> dict | None:
+    for role in experience:
+        if (role.get("to") or "").strip().lower() == "present":
+            return role
+    return experience[0] if experience else None
+
+def build_candidate_fields(parsed: dict) -> dict:
+    experience = parsed.get("experience") or []
+    education = parsed.get("education") or []
+    current_role = find_current_role(experience)
+
+    return {
+        "experience_json": experience,
+        "education_json": education,
+        "total_experience_years": parsed.get("total_exp_years"),
+        "current_company": current_role.get("company") if current_role else None,
+        "current_designation": current_role.get("title") if current_role else None,
+        "college_university": education[0].get("institution") if education else None,
+        "education_to_year": education[0].get("year") or None,
+    }
+
 def match_jobs_for_document(workspace_id, cv_document_id, sender_email, parsed, job_ids, cv_path=None):
     effective_email = sender_email or parsed.get("email")
 

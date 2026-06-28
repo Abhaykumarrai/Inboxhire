@@ -33,12 +33,13 @@ Extract the following fields and return STRICT JSON only — no markdown, no cod
 }}
 
 Rules:
-- "phone": a real phone number only. Tracking/request IDs are NOT phone numbers — leave empty if none.
-- "skills": bare skill names with NO version numbers (e.g. "Java" not "Java 8/11/17/21", "Spring Boot" not "Spring Boot 3.x").
-- "summary": ONE sentence, max 25 words, describing seniority and core expertise. No filler.
-- Each experience entry's "skills_used": ONLY skills from the main "skills" list that this specific role actually mentions using — max 6.
-- Each experience entry's "highlight": ONE short achievement from that role, max 12 words. Empty string if none stated.
+- "phone": a real phone number only. Tracking/request IDs are NOT phone numbers.
+- "skills": bare skill names with NO version numbers.
+- "summary": ONE sentence, max 25 words.
+- Each experience entry's "skills_used": ONLY skills from the main "skills" list actually used in that role — max 6.
+- Each experience entry's "highlight": ONE short achievement, max 12 words. Empty if none stated.
 - "to" should be "Present" for ongoing roles.
+- education "year" = graduation year.
 - total_exp_years: best numeric estimate, using today's date for "Present" roles.
 - Missing fields: empty string/array. Never invent information.
 """
