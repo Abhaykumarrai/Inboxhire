@@ -1,9 +1,11 @@
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Literal
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 from lib.supabase_client import supabase
 from lib.auth_utils import get_current_user
+from lib.scorer import calculate_score
+from lib.cron_routes import scan_gmail_job, scan_drive_job
 
 router = APIRouter()
 
@@ -13,6 +15,21 @@ def get_max_jobs(workspace_id: str) -> int:
         return 1
     plan = supabase.table("plans").select("max_jobs").eq("id", workspace["plan_id"]).single().execute().data
     return plan["max_jobs"]
+
+def rescore_existing_applications(job_id: str):
+    applications = supabase.table("applications").select("id, cv_document_id").eq("job_id", job_id).execute().data
+    for app in applications:
+        if not app.get("cv_document_id"):
+            continue
+        doc = supabase.table("cv_documents").select("parsed_json").eq("id", app["cv_document_id"]).single().execute().data
+        if not doc or not doc.get("parsed_json"):
+            continue
+        score = calculate_score(doc["parsed_json"], job_id)
+        existing = supabase.table("scores").select("id").eq("application_id", app["id"]).maybe_single().execute()
+        if existing and existing.data:
+            supabase.table("scores").update(score).eq("application_id", app["id"]).execute()
+        else:
+            supabase.table("scores").insert({"application_id": app["id"], **score}).execute()
 
 class CreateJobRequest(BaseModel):
     title: str
@@ -29,6 +46,21 @@ class CreateJobRequest(BaseModel):
     email_filter: str = "CV"
     source_type: Literal["gmail", "drive", "api"]
     source_connection_id: str | None = None
+    scan_from_date: date | None = None
+    scan_to_date: date | None = None
+
+class UpdateJobRequest(BaseModel):
+    title: str | None = None
+    designation: str | None = None
+    company_name: str | None = None
+    offer_designation: str | None = None
+    required_skills: list[str] | None = None
+    nice_skills: list[str] | None = None
+    exp_min: int | None = None
+    exp_max: int | None = None
+    education: str | None = None
+    salary_min: int | None = None
+    salary_max: int | None = None
     scan_from_date: date | None = None
     scan_to_date: date | None = None
 
@@ -131,3 +163,93 @@ def get_candidates(job_id: str, min_score: int = 0):
     ]
     filtered.sort(key=lambda a: a["scores"]["total"] if a.get("scores") else 0, reverse=True)
     return filtered
+
+@router.post("/api/jobs/{job_id}/scan")
+def trigger_scan(job_id: str, user: dict = Depends(get_current_user)):
+    job = supabase.table("jobs").select("*").eq("id", job_id).eq("workspace_id", user["workspace_id"]).single().execute().data
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if user["role"] != "admin" and job.get("created_by_user_id") != user["user_id"]:
+        raise HTTPException(status_code=403, detail="You can only scan jobs you created")
+    if job["status"] == "closed":
+        raise HTTPException(status_code=400, detail="This job is closed. Reopen it before scanning.")
+
+    if job.get("last_scanned_at"):
+        last_scanned = datetime.fromisoformat(job["last_scanned_at"])
+        if (datetime.now(timezone.utc) - last_scanned).total_seconds() < 30:
+            raise HTTPException(status_code=429, detail="This job was just scanned. Please wait a moment before trying again.")
+
+    if job.get("gmail_connection_id"):
+        scan_gmail_job(job)
+    elif job.get("drive_connection_id"):
+        scan_drive_job(job)
+    else:
+        raise HTTPException(status_code=400, detail="This job has no scan source configured.")
+
+    return {"message": "Scan triggered successfully", "job_id": job_id}
+
+@router.patch("/api/jobs/{job_id}")
+def update_job(job_id: str, data: UpdateJobRequest, user: dict = Depends(get_current_user)):
+    job = supabase.table("jobs").select("*").eq("id", job_id).eq("workspace_id", user["workspace_id"]).single().execute().data
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if user["role"] != "admin" and job.get("created_by_user_id") != user["user_id"]:
+        raise HTTPException(status_code=403, detail="You can only edit jobs you created")
+
+    updates = data.model_dump(exclude_unset=True)
+    if not updates:
+        raise HTTPException(status_code=400, detail="No fields provided to update")
+
+    new_exp_min = updates.get("exp_min", job["exp_min"])
+    new_exp_max = updates.get("exp_max", job["exp_max"])
+    if new_exp_min > new_exp_max:
+        raise HTTPException(status_code=400, detail="exp_min cannot be greater than exp_max")
+
+    if "scan_from_date" in updates:
+        updates["scan_from_date"] = updates["scan_from_date"].isoformat()
+    if "scan_to_date" in updates:
+        updates["scan_to_date"] = updates["scan_to_date"].isoformat()
+
+    new_from = updates.get("scan_from_date", job.get("scan_from_date"))
+    new_to = updates.get("scan_to_date", job.get("scan_to_date"))
+    if new_from and new_to and str(new_from) > str(new_to):
+        raise HTTPException(status_code=400, detail="scan_from_date cannot be after scan_to_date")
+
+    updated_job = supabase.table("jobs").update(updates).eq("id", job_id).execute().data[0]
+
+    SCORE_AFFECTING_FIELDS = {"required_skills", "nice_skills", "exp_min", "exp_max", "education"}
+    if SCORE_AFFECTING_FIELDS & updates.keys():
+        rescore_existing_applications(job_id)
+
+    return updated_job
+
+@router.delete("/api/jobs/{job_id}")
+def delete_job(job_id: str, user: dict = Depends(get_current_user)):
+    job = supabase.table("jobs").select("id, created_by_user_id").eq("id", job_id).eq("workspace_id", user["workspace_id"]).single().execute().data
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if user["role"] != "admin" and job.get("created_by_user_id") != user["user_id"]:
+        raise HTTPException(status_code=403, detail="You can only delete jobs you created")
+
+    supabase.table("jobs").delete().eq("id", job_id).execute()
+    return {"message": "Job deleted"}
+
+@router.patch("/api/jobs/{job_id}/close")
+def close_job(job_id: str, user: dict = Depends(get_current_user)):
+    job = supabase.table("jobs").select("id, created_by_user_id").eq("id", job_id).eq("workspace_id", user["workspace_id"]).single().execute().data
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if user["role"] != "admin" and job.get("created_by_user_id") != user["user_id"]:
+        raise HTTPException(status_code=403, detail="You can only close jobs you created")
+    supabase.table("jobs").update({"status": "closed"}).eq("id", job_id).execute()
+    return {"message": "Job marked inactive. No further scanning — manual or automatic — will occur."}
+
+@router.patch("/api/jobs/{job_id}/reopen")
+def reopen_job(job_id: str, user: dict = Depends(get_current_user)):
+    job = supabase.table("jobs").select("id, created_by_user_id").eq("id", job_id).eq("workspace_id", user["workspace_id"]).single().execute().data
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if user["role"] != "admin" and job.get("created_by_user_id") != user["user_id"]:
+        raise HTTPException(status_code=403, detail="You can only reopen jobs you created")
+    supabase.table("jobs").update({"status": "active"}).eq("id", job_id).execute()
+    return {"message": "Job reopened and active again"}

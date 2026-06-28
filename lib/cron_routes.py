@@ -2,7 +2,7 @@ import hashlib
 import base64
 import re
 import io
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter
 from google.oauth2.credentials import Credentials
 from google.oauth2.credentials import Credentials as DriveCreds
@@ -180,3 +180,43 @@ def process_drive_file(service, file_meta, conn, job_ids):
             "cv_path": path, "file_hash": file_hash, "sender_email": None, "job_ids": job_ids,
         },
     ))
+
+
+def scan_gmail_job(job: dict):
+    conn = supabase.table("gmail_connections").select("*").eq("id", job["gmail_connection_id"]).single().execute().data
+    creds = Credentials(**conn["gmail_token"])
+    service = build("gmail", "v1", credentials=creds)
+
+    date_filter = ""
+    if job.get("scan_from_date") and job.get("scan_to_date"):
+        from_str = job["scan_from_date"].replace("-", "/")
+        to_obj = datetime.strptime(job["scan_to_date"], "%Y-%m-%d").date() + timedelta(days=1)
+        date_filter = f" after:{from_str} before:{to_obj.strftime('%Y/%m/%d')}"
+
+    search_query = f"has:attachment{date_filter}"
+    res = service.users().messages().list(userId="me", q=search_query, maxResults=50).execute()
+    messages = res.get("messages", [])
+    print(f">>> [Manual scan] Job '{job['title']}' — found {len(messages)} message(s)")
+
+    for m in messages:
+        process_message(service, m["id"], conn, [job["id"]])
+
+    supabase.table("jobs").update({"last_scanned_at": datetime.now(timezone.utc).isoformat()}).eq("id", job["id"]).execute()
+
+
+def scan_drive_job(job: dict):
+    conn = supabase.table("drive_connections").select("*").eq("id", job["drive_connection_id"]).single().execute().data
+    creds = DriveCreds(**conn["drive_token"])
+    service = build_drive_service("drive", "v3", credentials=creds)
+
+    results = service.files().list(
+        q=f"'{conn['folder_id']}' in parents and trashed=false and (mimeType='application/pdf' or mimeType='application/vnd.openxmlformats-officedocument.wordprocessingml.document')",
+        fields="files(id, name, mimeType)", pageSize=100,
+    ).execute()
+    files = results.get("files", [])
+    print(f">>> [Manual scan] Job '{job['title']}' — Drive — found {len(files)} file(s)")
+
+    for f in files:
+        process_drive_file(service, f, conn, [job["id"]])
+
+    supabase.table("jobs").update({"last_scanned_at": datetime.now(timezone.utc).isoformat()}).eq("id", job["id"]).execute()
