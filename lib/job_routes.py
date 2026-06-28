@@ -256,3 +256,29 @@ def reopen_job(job_id: str, user: dict = Depends(get_current_user)):
         raise HTTPException(status_code=403, detail="You can only reopen jobs you created")
     supabase.table("jobs").update({"status": "active"}).eq("id", job_id).execute()
     return {"message": "Job reopened and active again"}
+
+@router.patch("/api/jobs/{job_id}/pause")
+def pause_job(job_id: str, user: dict = Depends(get_current_user)):
+    job = supabase.table("jobs").select("id, created_by_user_id, status").eq("id", job_id).eq("workspace_id", user["workspace_id"]).single().execute().data
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if user["role"] != "admin" and job.get("created_by_user_id") != user["user_id"]:
+        raise HTTPException(status_code=403, detail="You can only pause jobs you created")
+    if job["status"] == "closed":
+        raise HTTPException(status_code=400, detail="This job is closed. Reopen it first.")
+
+    supabase.table("jobs").update({"status": "paused"}).eq("id", job_id).execute()
+    return {"message": "Job paused — automatic scanning stopped. Manual scanning is still available."}
+
+@router.patch("/api/jobs/{job_id}/resume")
+def resume_job(job_id: str, user: dict = Depends(get_current_user)):
+    job = supabase.table("jobs").select("id, created_by_user_id, status").eq("id", job_id).eq("workspace_id", user["workspace_id"]).single().execute().data
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if user["role"] != "admin" and job.get("created_by_user_id") != user["user_id"]:
+        raise HTTPException(status_code=403, detail="You can only resume jobs you created")
+    if job["status"] == "closed":
+        raise HTTPException(status_code=400, detail="This job is closed. Use Reopen instead of Resume.")
+
+    supabase.table("jobs").update({"status": "active"}).eq("id", job_id).execute()
+    return {"message": "Job resumed — automatic scanning is active again."}
