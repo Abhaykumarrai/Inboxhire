@@ -154,7 +154,7 @@ def list_jobs(user: dict = Depends(get_current_user)):
 def get_candidates(job_id: str, min_score: int = 0):
     applications = (
         supabase.table("applications")
-        .select("id, stage, received_at, recruiter_note, candidates(name, email, phone, raw_cv_url), parsed_profiles(skills, experience_json, education_json, total_exp_years, location), scores(total, skills_score, exp_score, edu_score, profile_score, recency_score, breakdown_json)")
+        .select("id, stage, received_at, recruiter_note, candidates(name, email, phone, raw_cv_url), parsed_profiles(skills, experience_json, education_json, total_exp_years, location, raw_text, linkedin_url), scores(total, skills_score, exp_score, edu_score, profile_score, recency_score, breakdown_json)")
         .eq("job_id", job_id)
         .execute()
         .data
