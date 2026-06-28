@@ -6,13 +6,27 @@ def match_jobs_for_document(workspace_id, cv_document_id, sender_email, parsed, 
 
     candidate_data = None
     if effective_email:
-        candidate = supabase.table("candidates").select("id").eq("workspace_id", workspace_id).eq("email", effective_email).maybe_single().execute()
+        candidate = supabase.table("candidates").select("id, name, phone").eq("workspace_id", workspace_id).eq("email", effective_email).maybe_single().execute()
         candidate_data = candidate.data if candidate else None
 
     if not candidate_data:
         candidate_data = supabase.table("candidates").insert({
-            "workspace_id": workspace_id, "email": effective_email, "raw_cv_url": cv_path,
+            "workspace_id": workspace_id,
+            "email": effective_email,
+            "name": parsed.get("name"),
+            "phone": parsed.get("phone"),
+            "raw_cv_url": cv_path,
         }).execute().data[0]
+    elif not candidate_data.get("name") or not candidate_data.get("phone"):
+        # Existing candidate, but missing name/phone from an earlier incomplete write — backfill now, free
+        updates = {}
+        if not candidate_data.get("name") and parsed.get("name"):
+            updates["name"] = parsed.get("name")
+        if not candidate_data.get("phone") and parsed.get("phone"):
+            updates["phone"] = parsed.get("phone")
+        if updates:
+            supabase.table("candidates").update(updates).eq("id", candidate_data["id"]).execute()
+            candidate_data.update(updates)
     for job_id in job_ids:
         existing = supabase.table("applications").select("id").eq("job_id", job_id).eq("cv_document_id", cv_document_id).maybe_single().execute()
         if existing and existing.data:
