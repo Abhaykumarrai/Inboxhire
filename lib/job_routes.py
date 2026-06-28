@@ -33,16 +33,12 @@ def rescore_existing_applications(job_id: str):
 
 class CreateJobRequest(BaseModel):
     title: str
-    designation: str | None = None
-    company_name: str | None = None
-    offer_designation: str | None = None
     required_skills: list[str] = []
     nice_skills: list[str] = []
     exp_min: int = 0
     exp_max: int = 99
     education: str | None = None
-    salary_min: int | None = None
-    salary_max: int | None = None
+    location: str | None = None
     email_filter: str = "CV"
     source_type: Literal["gmail", "drive", "api"]
     source_connection_id: str | None = None
@@ -51,16 +47,12 @@ class CreateJobRequest(BaseModel):
 
 class UpdateJobRequest(BaseModel):
     title: str | None = None
-    designation: str | None = None
-    company_name: str | None = None
-    offer_designation: str | None = None
     required_skills: list[str] | None = None
     nice_skills: list[str] | None = None
     exp_min: int | None = None
     exp_max: int | None = None
     education: str | None = None
-    salary_min: int | None = None
-    salary_max: int | None = None
+    location: str | None = None
     scan_from_date: date | None = None
     scan_to_date: date | None = None
 
@@ -217,7 +209,7 @@ def update_job(job_id: str, data: UpdateJobRequest, user: dict = Depends(get_cur
 
     updated_job = supabase.table("jobs").update(updates).eq("id", job_id).execute().data[0]
 
-    SCORE_AFFECTING_FIELDS = {"required_skills", "nice_skills", "exp_min", "exp_max", "education"}
+    SCORE_AFFECTING_FIELDS = {"required_skills", "nice_skills", "exp_min", "exp_max", "education", "location"}
     if SCORE_AFFECTING_FIELDS & updates.keys():
         rescore_existing_applications(job_id)
 

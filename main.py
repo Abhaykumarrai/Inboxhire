@@ -21,6 +21,7 @@ app = FastAPI(
         {"name": "Applications", "description": "Per-candidate actions — stage, notes, score override, CV access, outreach email"},
         {"name": "Search & AI Agent", "description": "Conversational candidate search and agentic actions (drafting, etc.)"},
         {"name": "Voice", "description": "Text-to-speech for spoken search responses"},
+        {"name": "Settings", "description": "Workspace scoring weights and preferences"},
         {"name": "CV Parsing", "description": "Internal endpoint used by the parsing pipeline"},
         {"name": "Background Jobs", "description": "Cron polling and Inngest — internal, not for direct manual use"},
     ],
@@ -71,6 +72,9 @@ app.include_router(agent_router, tags=["Search & AI Agent"])
 
 from lib.voice_routes import router as voice_router
 app.include_router(voice_router, tags=["Voice"])
+
+from lib.settings_routes import router as settings_router
+app.include_router(settings_router, tags=["Settings"])
 
 import inngest.fast_api
 from lib.cron_routes import router as cron_router

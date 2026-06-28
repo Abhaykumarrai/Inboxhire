@@ -2,30 +2,14 @@ import re
 import calendar
 from datetime import date
 from lib.supabase_client import supabase
-
-def normalize(s: str) -> str:
-    return re.sub(r'[^a-z0-9]', '', s.lower())
-
-def skill_matches(required: str, cv_skills_normalized: list) -> bool:
-    req_norm = normalize(required)
-    if not req_norm:
-        return False
-    return any(req_norm in cv_skill or cv_skill in req_norm for cv_skill in cv_skills_normalized)
-
-def find_matching_cv_skill(required: str, cv_skills: list) -> str | None:
-    req_norm = normalize(required)
-    for skill in cv_skills:
-        skill_norm = normalize(skill)
-        if req_norm in skill_norm or skill_norm in req_norm:
-            return skill
-    return None
+from lib.skill_matching import normalize, skill_matches, find_matching_cv_skill
+from lib.scoring_weights import get_scoring_weights
 
 EDUCATION_KEYWORDS = {
     "btech": ["btech"], "be": ["be"], "mtech": ["mtech"], "mba": ["mba"],
     "bca": ["bca"], "mca": ["mca"], "bsc": ["bsc"], "msc": ["msc"],
     "bcom": ["bcom"], "phd": ["phd"],
 }
-
 MONTH_MAP = {m.lower(): i for i, m in enumerate(calendar.month_abbr) if m}
 
 def parse_month_year(s: str):
@@ -77,6 +61,7 @@ def proficiency_score(years: float) -> int:
 
 def calculate_score(parsed: dict, job_id: str) -> dict:
     job = supabase.table("jobs").select("*").eq("id", job_id).single().execute().data
+    weights = get_scoring_weights(job["workspace_id"])
 
     requirements = []
     cv_skills = parsed.get("skills") or []
@@ -85,16 +70,21 @@ def calculate_score(parsed: dict, job_id: str) -> dict:
     exp = parsed.get("total_exp_years") or 0
     exp_min = job.get("exp_min") or 0
     exp_max = job.get("exp_max") or 99
+    exp_weight = weights["experience_weight"]
+    under_penalty_per_year = (5 / 30) * exp_weight
+    over_penalty_per_year = (2 / 30) * exp_weight
+    over_floor = (10 / 30) * exp_weight
+
     if exp_min <= exp <= exp_max:
-        exp_status, exp_score = "matched", 30
+        exp_status, exp_score = "matched", exp_weight
     elif exp < exp_min:
         gap = exp_min - exp
         exp_status = "partial" if gap <= 2 else "gap"
-        exp_score = max(0, 30 - gap * 5)
+        exp_score = max(0, exp_weight - gap * under_penalty_per_year)
     else:
         over = exp - exp_max
         exp_status = "partial" if over <= 2 else "gap"
-        exp_score = max(10, 30 - over * 2)
+        exp_score = max(over_floor, exp_weight - over * over_penalty_per_year)
     requirements.append({
         "category": "experience", "label": f"{exp_min}-{exp_max} years",
         "candidate_value": f"{exp} yrs", "status": exp_status,
@@ -106,27 +96,50 @@ def calculate_score(parsed: dict, job_id: str) -> dict:
     cv_degree = education_list[0].get("degree", "") if education_list else ""
     cv_degree_norm = normalize(cv_degree)
     req_edu_norm = normalize(req_edu_raw)
+    edu_weight = weights["education_weight"]
 
     if req_edu_raw:
-        matched = any(
+        matched_edu = any(
             any(v in req_edu_norm for v in variants) and any(v in cv_degree_norm for v in variants)
             for variants in EDUCATION_KEYWORDS.values()
         )
-        if matched:
-            edu_status, edu_score = "matched", 15
+        if matched_edu:
+            edu_status, edu_score = "matched", edu_weight
         elif cv_degree:
-            edu_status, edu_score = "partial", 8
+            edu_status, edu_score = "partial", round(edu_weight * (8 / 15))
         else:
-            edu_status, edu_score = "gap", 4
+            edu_status, edu_score = "gap", round(edu_weight * (4 / 15))
         requirements.append({
             "category": "education", "label": req_edu_raw,
             "candidate_value": cv_degree or "Not found", "status": edu_status,
         })
     else:
-        edu_score = 8
+        edu_score = round(edu_weight * (8 / 15))
+
+    # --- Location ---
+    req_location = job.get("location") or ""
+    location_weight = weights["location_weight"]
+    if req_location:
+        candidate_location = parsed.get("location") or ""
+        if not candidate_location:
+            loc_status, loc_score = "partial", round(location_weight * 0.5)
+        elif req_location.lower() in candidate_location.lower() or candidate_location.lower() in req_location.lower():
+            loc_status, loc_score = "matched", location_weight
+        else:
+            loc_status, loc_score = "gap", 0
+        requirements.append({
+            "category": "location", "label": req_location,
+            "candidate_value": candidate_location or "Not specified", "status": loc_status,
+        })
+    else:
+        loc_score = location_weight
 
     # --- Must-have skills ---
     must_have = job.get("required_skills") or []
+    skills_weight = weights["skills_weight"]
+    must_slice = skills_weight * 0.8
+    nice_slice = skills_weight * 0.2
+
     must_matched_count = 0
     for skill in must_have:
         matched_skill = find_matching_cv_skill(skill, cv_skills)
@@ -136,7 +149,7 @@ def calculate_score(parsed: dict, job_id: str) -> dict:
             "category": "must_have", "label": skill,
             "candidate_value": matched_skill, "status": "matched" if matched_skill else "gap",
         })
-    skills_score_must = (must_matched_count / len(must_have)) * 32 if must_have else 32
+    must_score = (must_matched_count / len(must_have)) * must_slice if must_have else must_slice
 
     # --- Nice-to-have skills ---
     nice_to_have = job.get("nice_skills") or []
@@ -149,15 +162,17 @@ def calculate_score(parsed: dict, job_id: str) -> dict:
             "category": "nice_to_have", "label": skill,
             "candidate_value": matched_skill, "status": "matched" if matched_skill else "gap",
         })
-    skills_score_nice = (nice_matched_count / len(nice_to_have)) * 8 if nice_to_have else 0
-    skills_score = round(skills_score_must + skills_score_nice)
+    nice_score = (nice_matched_count / len(nice_to_have)) * nice_slice if nice_to_have else 0
+    skills_score = round(must_score + nice_score)
 
     # --- Profile completeness ---
     fields = ["name", "email", "phone", "skills", "experience"]
-    profile_score = round((sum(1 for f in fields if parsed.get(f)) / len(fields)) * 10)
-    recency_score = 5
+    profile_weight = weights["profile_weight"]
+    profile_score = round((sum(1 for f in fields if parsed.get(f)) / len(fields)) * profile_weight)
 
-    total = skills_score + round(exp_score) + edu_score + profile_score + recency_score
+    recency_score = weights["recency_weight"]
+
+    total = skills_score + round(exp_score) + edu_score + round(loc_score) + profile_score + recency_score
 
     matched_count = sum(1 for r in requirements if r["status"] == "matched")
     partial_count = sum(1 for r in requirements if r["status"] == "partial")
@@ -170,7 +185,6 @@ def calculate_score(parsed: dict, job_id: str) -> dict:
         {r["candidate_value"] for r in requirements if r.get("candidate_value") and r["status"] in ("matched", "partial")}
     )
 
-    # --- Free enrichment: per-skill years, per-role fit, highlights ---
     experience = parsed.get("experience") or []
     skill_years = compute_skill_years(experience)
     skill_proficiency = {
@@ -184,20 +198,16 @@ def calculate_score(parsed: dict, job_id: str) -> dict:
     highlights = [r["highlight"] for r in experience if r.get("highlight")][:3]
 
     breakdown_json = {
-        "match_percentage": match_percentage,
-        "matched_count": matched_count,
-        "partial_count": partial_count,
-        "gap_count": gap_count,
-        "requirements": requirements,
-        "highlight_terms": highlight_terms,
-        "summary": parsed.get("summary", ""),
-        "skill_proficiency": skill_proficiency,
-        "experience_breakdown": experience_breakdown,
-        "highlights": highlights,
+        "match_percentage": match_percentage, "matched_count": matched_count,
+        "partial_count": partial_count, "gap_count": gap_count,
+        "requirements": requirements, "highlight_terms": highlight_terms,
+        "summary": parsed.get("summary", ""), "skill_proficiency": skill_proficiency,
+        "experience_breakdown": experience_breakdown, "highlights": highlights,
+        "weights_used": weights,
     }
 
     return {
         "skills_score": skills_score, "exp_score": round(exp_score), "edu_score": edu_score,
-        "profile_score": profile_score, "recency_score": recency_score, "total": total,
-        "breakdown_json": breakdown_json,
+        "location_score": round(loc_score), "profile_score": profile_score,
+        "recency_score": recency_score, "total": total, "breakdown_json": breakdown_json,
     }
