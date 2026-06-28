@@ -126,6 +126,12 @@ def list_jobs(user: dict = Depends(get_current_user)):
         .execute()
         .data
     )
+
+    def unwrap(value):
+        if isinstance(value, list):
+            return value[0] if value else None
+        return value
+
     for job in jobs:
         applications = (
             supabase.table("applications")
@@ -134,8 +140,13 @@ def list_jobs(user: dict = Depends(get_current_user)):
             .execute()
             .data
         )
-        job["total_found"] = len(applications)
+        for a in applications:
+            a["scores"] = unwrap(a.get("scores"))
+
+        job["total_scanned"] = len(applications)
+        job["top_matches"] = sum(1 for a in applications if a.get("scores") and a["scores"].get("total", 0) >= 70)
         job["shortlisted"] = sum(1 for a in applications if a.get("stage") == "shortlisted")
+        job["in_progress"] = sum(1 for a in applications if a.get("stage") == "in_progress")
         job["new_found"] = sum(1 for a in applications if a.get("stage") == "new")
     return jobs
 
