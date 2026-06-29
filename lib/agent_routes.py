@@ -59,10 +59,11 @@ class ChatRequest(BaseModel):
 
 def get_or_create_conversation(conversation_id, user):
     if conversation_id:
-        convo = supabase.table("agent_conversations").select("*").eq("id", conversation_id).eq("workspace_id", user["workspace_id"]).single().execute().data
-        if not convo:
-            raise HTTPException(status_code=404, detail="Conversation not found")
-        return convo
+        convo = supabase.table("agent_conversations").select("*").eq("id", conversation_id).eq("workspace_id", user["workspace_id"]).maybe_single().execute()
+        if convo and convo.data:
+            return convo.data
+        # conversation_id was provided but doesn't exist (stale/invalid) — fall through and start a fresh one instead of crashing
+
     return supabase.table("agent_conversations").insert({
         "workspace_id": user["workspace_id"], "user_id": user["user_id"], "messages": [], "last_search_results": [],
     }).execute().data[0]
